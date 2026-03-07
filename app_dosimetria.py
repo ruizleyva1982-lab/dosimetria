@@ -74,18 +74,26 @@ def cargar_registros() -> dict:
         ws  = get_hoja(HOJA_REGISTROS)
         data = ws.get_all_records()
         registros = {}
+        def safe_float(val):
+            if isinstance(val, str):
+                val = val.replace(",", ".")
+            try:
+                return float(val or 0)
+            except:
+                return 0.0
+
         for row in data:
             clave = f"{row.get('fecha','')}__{row.get('codigo','')}"
             mesas = {}
             for m in MESAS:
-                mesas[str(m)] = float(row.get(f"mesa{m}", 0) or 0)
+                mesas[str(m)] = safe_float(row.get(f"mesa{m}", 0))
             registros[clave] = {
                 "fecha":   row.get("fecha", ""),
                 "codigo":  row.get("codigo", ""),
                 "insumo":  row.get("insumo", ""),
                 "um":      row.get("um", ""),
                 "mesas":   mesas,
-                "total":   float(row.get("total", 0) or 0),
+                "total":   safe_float(row.get("total", 0)),
                 "updated": row.get("updated", ""),
             }
         return registros
@@ -103,8 +111,9 @@ def guardar_registros(data: dict):
             m = v.get("mesas", {})
             rows.append([
                 v.get("fecha",""), v.get("codigo",""), v.get("insumo",""), v.get("um",""),
-                m.get("1",0), m.get("2",0), m.get("3",0), m.get("4",0), m.get("5",0),
-                v.get("total",0), v.get("updated","")
+                float(m.get("1",0)), float(m.get("2",0)), float(m.get("3",0)),
+                float(m.get("4",0)), float(m.get("5",0)),
+                float(v.get("total",0)), v.get("updated","")
             ])
         ws.clear()
         ws.update(rows)
