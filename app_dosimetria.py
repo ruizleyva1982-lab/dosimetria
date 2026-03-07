@@ -109,11 +109,18 @@ def guardar_registros(data: dict):
         rows = [headers]
         for v in data.values():
             m = v.get("mesas", {})
+            # Guardar como string con punto decimal para evitar que Sheets altere los valores
+            def fmt(val):
+                try:
+                    f = float(val or 0)
+                    return str(f)
+                except:
+                    return "0.0"
             rows.append([
                 v.get("fecha",""), v.get("codigo",""), v.get("insumo",""), v.get("um",""),
-                float(m.get("1",0)), float(m.get("2",0)), float(m.get("3",0)),
-                float(m.get("4",0)), float(m.get("5",0)),
-                float(v.get("total",0)), v.get("updated","")
+                fmt(m.get("1",0)), fmt(m.get("2",0)), fmt(m.get("3",0)),
+                fmt(m.get("4",0)), fmt(m.get("5",0)),
+                fmt(v.get("total",0)), v.get("updated","")
             ])
         ws.clear()
         ws.update(rows)
