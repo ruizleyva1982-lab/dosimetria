@@ -1,115 +1,116 @@
 import streamlit as st
 import pandas as pd
 import json
-import os
 import io
 from datetime import date, datetime
+import gspread
+from google.oauth2.service_account import Credentials
 
 # ──────────────────────────────────────────────
 # CONFIGURACIÓN
 # ──────────────────────────────────────────────
-INVENTARIO_PATH = r"C:\Users\sergioruiz\Reportes\dosimetria\inventario.xlsx"
-REGISTROS_PATH  = r"C:\Users\sergioruiz\Reportes\dosimetria\registros_conteo.json"
-EXCEL_REGISTROS = r"C:\Users\sergioruiz\Reportes\dosimetria\registros_conteo.xlsx"
 MESAS = [1, 2, 3, 4, 5]
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
+          "https://www.googleapis.com/auth/drive"]
 
-st.set_page_config(page_title="Sistema de Dosimetría", page_icon="🧪", layout="wide")
+# Nombres de las hojas dentro del Google Sheets
+HOJA_INVENTARIO = "inventario"
+HOJA_REGISTROS  = "registros"
 
 # ──────────────────────────────────────────────
-# CARGA Y PERSISTENCIA
+# CONEXIÓN A GOOGLE SHEETS
+# ──────────────────────────────────────────────
+@st.cache_resource
+def get_client():
+    creds_dict = st.secrets["gcp_service_account"]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    return gspread.authorize(creds)
+
+def get_spreadsheet():
+    gc = get_client()
+    return gc.open_by_key(st.secrets["spreadsheet_id"])
+
+def get_hoja(nombre: str):
+    sh = get_spreadsheet()
+    try:
+        return sh.worksheet(nombre)
+    except gspread.WorksheetNotFound:
+        return sh.add_worksheet(title=nombre, rows=1000, cols=20)
+
+# ──────────────────────────────────────────────
+# INVENTARIO
 # ──────────────────────────────────────────────
 @st.cache_data(ttl=60)
-def cargar_inventario():
+def cargar_inventario() -> pd.DataFrame:
     try:
-        df = pd.read_excel(INVENTARIO_PATH)
+        ws = get_hoja(HOJA_INVENTARIO)
+        data = ws.get_all_records()
+        if not data:
+            return pd.DataFrame(columns=["CÓDIGO", "INSUMO", "UM"])
+        df = pd.DataFrame(data)
         df.columns = [c.strip().upper() for c in df.columns]
         return df
     except Exception as e:
-        st.error(f"No se pudo cargar el inventario: {e}")
+        st.error(f"Error cargando inventario: {e}")
         return pd.DataFrame(columns=["CÓDIGO", "INSUMO", "UM"])
 
 def guardar_inventario(df: pd.DataFrame):
     try:
-        df.to_excel(INVENTARIO_PATH, index=False)
+        ws = get_hoja(HOJA_INVENTARIO)
+        ws.clear()
+        df.columns = [c.upper() for c in df.columns]
+        ws.update([df.columns.tolist()] + df.fillna("").values.tolist())
         cargar_inventario.clear()
-    except PermissionError:
-        st.error("⚠️ No se pudo guardar porque **inventario.xlsx** está abierto en Excel. Ciérralo e intenta de nuevo.")
+    except Exception as e:
+        st.error(f"Error guardando inventario: {e}")
         st.stop()
 
+# ──────────────────────────────────────────────
+# REGISTROS DE CONTEO
+# ──────────────────────────────────────────────
+@st.cache_data(ttl=30)
 def cargar_registros() -> dict:
-    if os.path.exists(REGISTROS_PATH):
-        with open(REGISTROS_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+    try:
+        ws  = get_hoja(HOJA_REGISTROS)
+        data = ws.get_all_records()
+        registros = {}
+        for row in data:
+            clave = f"{row.get('fecha','')}__{row.get('codigo','')}"
+            mesas = {}
+            for m in MESAS:
+                mesas[str(m)] = float(row.get(f"mesa{m}", 0) or 0)
+            registros[clave] = {
+                "fecha":   row.get("fecha", ""),
+                "codigo":  row.get("codigo", ""),
+                "insumo":  row.get("insumo", ""),
+                "um":      row.get("um", ""),
+                "mesas":   mesas,
+                "total":   float(row.get("total", 0) or 0),
+                "updated": row.get("updated", ""),
+            }
+        return registros
+    except Exception as e:
+        st.error(f"Error cargando registros: {e}")
+        return {}
 
 def guardar_registros(data: dict):
-    with open(REGISTROS_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    guardar_excel_registros(data)
-
-def guardar_excel_registros(data: dict):
-    if not data:
-        return
     try:
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        from openpyxl.utils import get_column_letter
-
-        wb = Workbook()
-        wb.remove(wb.active)
-        fechas  = sorted(set(v["fecha"] for v in data.values()), reverse=True)
-        color_h = "1A3A5C"
-        color_s = "2C6FB5"
-        thin    = Side(style="thin", color="CCCCCC")
-        borde   = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-        for fecha in fechas:
-            regs = sorted([v for v in data.values() if v["fecha"] == fecha], key=lambda x: x["insumo"])
-            ws   = wb.create_sheet(title=fecha.replace("-", ""))
-            ws.merge_cells("A1:I1")
-            ws["A1"] = f"REGISTRO DE CONTEO — {fecha}"
-            ws["A1"].font      = Font(name="Arial", bold=True, size=13, color="FFFFFF")
-            ws["A1"].fill      = PatternFill("solid", fgColor=color_h)
-            ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
-            ws.row_dimensions[1].height = 28
-            for col, h in enumerate(["CÓDIGO","INSUMO","UM","MESA 1","MESA 2","MESA 3","MESA 4","MESA 5","TOTAL"], 1):
-                c = ws.cell(row=2, column=col, value=h)
-                c.font      = Font(name="Arial", bold=True, color="FFFFFF")
-                c.fill      = PatternFill("solid", fgColor=color_s)
-                c.alignment = Alignment(horizontal="center")
-                c.border    = borde
-            ws.row_dimensions[2].height = 20
-            for ri, reg in enumerate(regs, 3):
-                vals = [reg.get("codigo",""), reg.get("insumo",""), reg.get("um",""),
-                        reg.get("mesas",{}).get("1",0), reg.get("mesas",{}).get("2",0),
-                        reg.get("mesas",{}).get("3",0), reg.get("mesas",{}).get("4",0),
-                        reg.get("mesas",{}).get("5",0), reg.get("total",0)]
-                for ci, val in enumerate(vals, 1):
-                    c = ws.cell(row=ri, column=ci, value=val)
-                    c.font      = Font(name="Arial", size=10, bold=(ci==9), color=(color_h if ci==9 else "000000"))
-                    c.border    = borde
-                    c.alignment = Alignment(horizontal="left" if ci==2 else "center")
-                if ri % 2 == 0:
-                    for ci in range(1,10):
-                        ws.cell(row=ri, column=ci).fill = PatternFill("solid", fgColor="EEF2F7")
-            uf = 2 + len(regs) + 1
-            ws.merge_cells(f"A{uf}:C{uf}")
-            ws[f"A{uf}"] = "TOTAL GENERAL"
-            ws[f"A{uf}"].font      = Font(name="Arial", bold=True, color="FFFFFF")
-            ws[f"A{uf}"].fill      = PatternFill("solid", fgColor=color_h)
-            ws[f"A{uf}"].alignment = Alignment(horizontal="center")
-            for ci in range(4,10):
-                l = get_column_letter(ci)
-                c = ws.cell(row=uf, column=ci, value=f"=SUM({l}3:{l}{uf-1})")
-                c.font      = Font(name="Arial", bold=True, color="FFFFFF")
-                c.fill      = PatternFill("solid", fgColor=color_h)
-                c.alignment = Alignment(horizontal="center")
-                c.border    = borde
-            for ci, w in enumerate([14,40,12,10,10,10,10,10,12], 1):
-                ws.column_dimensions[get_column_letter(ci)].width = w
-        wb.save(EXCEL_REGISTROS)
-    except Exception:
-        pass
+        ws = get_hoja(HOJA_REGISTROS)
+        headers = ["fecha","codigo","insumo","um",
+                   "mesa1","mesa2","mesa3","mesa4","mesa5","total","updated"]
+        rows = [headers]
+        for v in data.values():
+            m = v.get("mesas", {})
+            rows.append([
+                v.get("fecha",""), v.get("codigo",""), v.get("insumo",""), v.get("um",""),
+                m.get("1",0), m.get("2",0), m.get("3",0), m.get("4",0), m.get("5",0),
+                v.get("total",0), v.get("updated","")
+            ])
+        ws.clear()
+        ws.update(rows)
+        cargar_registros.clear()
+    except Exception as e:
+        st.error(f"Error guardando registros: {e}")
 
 # ──────────────────────────────────────────────
 # HELPERS
@@ -134,10 +135,10 @@ def excel_bytes(df: pd.DataFrame) -> bytes:
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
     wb = Workbook(); ws = wb.active
-    color_s = "2C6FB5"; color_h = "1A3A5C"
-    thin = Side(style="thin", color="CCCCCC")
+    color_s = "2C6FB5"
+    thin  = Side(style="thin", color="CCCCCC")
     borde = Border(left=thin, right=thin, top=thin, bottom=thin)
-    cols = df.columns.tolist()
+    cols  = df.columns.tolist()
     for ci, col in enumerate(cols, 1):
         c = ws.cell(row=1, column=ci, value=col)
         c.font = Font(name="Arial", bold=True, color="FFFFFF")
@@ -253,15 +254,16 @@ with tab1:
                     "um": um, "mesas": valores_mesa, "total": total,
                     "updated": datetime.now().isoformat()
                 }
-                guardar_registros(registros)
+                with st.spinner("Guardando..."):
+                    guardar_registros(registros)
                 st.success(f"✅ Registro guardado para **{insumo_sel}** el **{fecha_str}**")
-                st.info("📊 Excel actualizado: `registros_conteo.xlsx`")
                 st.balloons()
         with col_eliminar:
             if clave in registros:
                 if st.button("🗑️ Eliminar Registro", use_container_width=True, type="secondary"):
                     del registros[clave]
-                    guardar_registros(registros)
+                    with st.spinner("Eliminando..."):
+                        guardar_registros(registros)
                     st.warning(f"⚠️ Registro eliminado para **{insumo_sel}** el **{fecha_str}**")
                     st.rerun()
 
@@ -333,121 +335,88 @@ with tab3:
             "🗓️ Exportar por Rango de Fechas",
         ])
 
-        # ── REPORTE MENSUAL ───────────────────
         with rep1:
             st.markdown("#### Reporte Mensual de Conteo")
             df_todos["Año-Mes"] = df_todos["Fecha"].dt.to_period("M").astype(str)
             meses_disponibles   = sorted(df_todos["Año-Mes"].unique(), reverse=True)
             mes_sel = st.selectbox("Selecciona el mes", meses_disponibles, key="mes_rep")
-
-            df_mes = df_todos[df_todos["Año-Mes"] == mes_sel].drop(columns=["Año-Mes"]).copy()
-            df_mes = df_mes.sort_values(["Fecha","Insumo"])
+            df_mes  = df_todos[df_todos["Año-Mes"] == mes_sel].drop(columns=["Año-Mes"]).copy()
+            df_mes  = df_mes.sort_values(["Fecha","Insumo"])
             df_mes["Fecha"] = df_mes["Fecha"].dt.strftime("%Y-%m-%d")
-
             st.success(f"📋 **{len(df_mes)}** registros en **{mes_sel}**")
-
             df_resumen = (df_mes.groupby(["Código","Insumo","UM"])["Total"]
-                          .sum().reset_index()
-                          .sort_values("Total", ascending=False)
+                          .sum().reset_index().sort_values("Total", ascending=False)
                           .rename(columns={"Total":"Total del Mes"}))
-
             col_det, col_res = st.columns(2)
+            cols_det = ["Fecha","Código","Insumo","UM"] + [f"Mesa {m}" for m in MESAS] + ["Total"]
             with col_det:
                 st.markdown("**Detalle por día**")
-                cols_det = ["Fecha","Código","Insumo","UM"] + [f"Mesa {m}" for m in MESAS] + ["Total"]
                 st.dataframe(df_mes[cols_det], use_container_width=True, hide_index=True)
             with col_res:
                 st.markdown("**Resumen acumulado por insumo**")
                 st.dataframe(df_resumen, use_container_width=True, hide_index=True)
-
             c1, c2, c3 = st.columns(3)
             c1.metric("📦 Registros", len(df_mes))
             c2.metric("🧴 Insumos distintos", df_mes["Insumo"].nunique())
             c3.metric("⚖️ Total acumulado", f"{df_mes['Total'].sum():,.2f}")
-
             col_d, col_r = st.columns(2)
             with col_d:
-                st.download_button("📥 Descargar detalle Excel",
-                                   data=excel_bytes(df_mes[cols_det]),
+                st.download_button("📥 Descargar detalle Excel", data=excel_bytes(df_mes[cols_det]),
                                    file_name=f"detalle_{mes_sel}.xlsx",
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             with col_r:
-                st.download_button("📥 Descargar resumen Excel",
-                                   data=excel_bytes(df_resumen),
+                st.download_button("📥 Descargar resumen Excel", data=excel_bytes(df_resumen),
                                    file_name=f"resumen_{mes_sel}.xlsx",
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # ── GRÁFICAS ──────────────────────────
         with rep2:
             st.markdown("#### Gráficas de Consumo")
             try:
                 import plotly.express as px
-
                 col_g1, col_g2 = st.columns(2)
-
-                # Gráfica 1 — Top 10 insumos
                 with col_g1:
                     st.markdown("**🏆 Top 10 Insumos por cantidad total**")
-                    df_top = (df_todos.groupby("Insumo")["Total"]
-                              .sum().reset_index()
+                    df_top = (df_todos.groupby("Insumo")["Total"].sum().reset_index()
                               .sort_values("Total", ascending=False).head(10))
                     fig1 = px.bar(df_top, x="Total", y="Insumo", orientation="h",
                                   color="Total", color_continuous_scale=["#90caf9","#1a3a5c"],
                                   labels={"Total":"Cantidad","Insumo":""})
                     fig1.update_layout(showlegend=False, yaxis=dict(autorange="reversed"),
-                                       plot_bgcolor="white", height=380,
-                                       margin=dict(l=10,r=10,t=10,b=10))
+                                       plot_bgcolor="white", height=380, margin=dict(l=10,r=10,t=10,b=10))
                     st.plotly_chart(fig1, use_container_width=True)
-
-                # Gráfica 2 — Total por fecha
                 with col_g2:
                     st.markdown("**📅 Total de conteo por fecha**")
-                    df_xf = (df_todos.groupby("Fecha")["Total"]
-                             .sum().reset_index().sort_values("Fecha"))
+                    df_xf = (df_todos.groupby("Fecha")["Total"].sum().reset_index().sort_values("Fecha"))
                     df_xf["Fecha_str"] = df_xf["Fecha"].dt.strftime("%d/%m/%Y")
                     fig2 = px.line(df_xf, x="Fecha_str", y="Total", markers=True,
                                    color_discrete_sequence=["#2c6fb5"],
                                    labels={"Fecha_str":"Fecha","Total":"Total contado"})
                     fig2.update_traces(line_width=2.5, marker_size=8)
-                    fig2.update_layout(plot_bgcolor="white", height=380,
-                                       margin=dict(l=10,r=10,t=10,b=10))
+                    fig2.update_layout(plot_bgcolor="white", height=380, margin=dict(l=10,r=10,t=10,b=10))
                     st.plotly_chart(fig2, use_container_width=True)
-
                 st.markdown("---")
-
-                # Gráfica 3 — Evolución de un insumo
                 st.markdown("**📈 Evolución de consumo por insumo**")
-                insumo_g = st.selectbox("Selecciona el insumo",
-                                         sorted(df_todos["Insumo"].unique()),
-                                         key="insumo_grafica")
-                df_evol = df_todos[df_todos["Insumo"] == insumo_g].sort_values("Fecha").copy()
+                insumo_g = st.selectbox("Selecciona el insumo", sorted(df_todos["Insumo"].unique()), key="insumo_grafica")
+                df_evol  = df_todos[df_todos["Insumo"] == insumo_g].sort_values("Fecha").copy()
                 df_evol["Fecha_str"] = df_evol["Fecha"].dt.strftime("%d/%m/%Y")
                 fig3 = px.area(df_evol, x="Fecha_str", y="Total", markers=True,
-                               color_discrete_sequence=["#2c6fb5"],
-                               labels={"Fecha_str":"Fecha","Total":"Cantidad"})
-                fig3.update_layout(plot_bgcolor="white", height=320,
-                                   margin=dict(l=10,r=10,t=10,b=10))
+                               color_discrete_sequence=["#2c6fb5"], labels={"Fecha_str":"Fecha","Total":"Cantidad"})
+                fig3.update_layout(plot_bgcolor="white", height=320, margin=dict(l=10,r=10,t=10,b=10))
                 st.plotly_chart(fig3, use_container_width=True)
-
-                # Gráfica 4 — Distribución por mesa
                 st.markdown("**🏭 Distribución acumulada por Mesa**")
                 totales_mesa = {f"Mesa {m}": float(df_todos[f"Mesa {m}"].sum()) for m in MESAS}
-                df_mesas_fig = pd.DataFrame({"Mesa": list(totales_mesa.keys()),
-                                              "Total": list(totales_mesa.values())})
-                fig4 = px.pie(df_mesas_fig, names="Mesa", values="Total",
-                              color_discrete_sequence=px.colors.sequential.Blues_r, hole=0.4)
+                df_mf = pd.DataFrame({"Mesa": list(totales_mesa.keys()), "Total": list(totales_mesa.values())})
+                fig4  = px.pie(df_mf, names="Mesa", values="Total",
+                               color_discrete_sequence=px.colors.sequential.Blues_r, hole=0.4)
                 fig4.update_layout(height=350, margin=dict(l=10,r=10,t=10,b=10))
                 st.plotly_chart(fig4, use_container_width=True)
-
             except ImportError:
-                st.error("Para ver gráficas instala plotly: `pip install plotly`")
+                st.error("Instala plotly: `pip install plotly`")
 
-        # ── RANGO DE FECHAS ───────────────────
         with rep3:
             st.markdown("#### Exportar por Rango de Fechas")
             fecha_min = df_todos["Fecha"].min().date()
             fecha_max = df_todos["Fecha"].max().date()
-
             col_fi, col_ff = st.columns(2)
             with col_fi:
                 f_inicio = st.date_input("📅 Fecha inicio", value=fecha_min,
@@ -455,40 +424,33 @@ with tab3:
             with col_ff:
                 f_fin = st.date_input("📅 Fecha fin", value=fecha_max,
                                        min_value=fecha_min, max_value=fecha_max, key="f_fin")
-
             if f_inicio > f_fin:
-                st.error("⚠️ La fecha de inicio no puede ser mayor a la fecha fin.")
+                st.error("⚠️ La fecha inicio no puede ser mayor a la fecha fin.")
             else:
                 df_rango = df_todos[
                     (df_todos["Fecha"].dt.date >= f_inicio) &
                     (df_todos["Fecha"].dt.date <= f_fin)
                 ].copy().sort_values(["Fecha","Insumo"])
                 df_rango["Fecha"] = df_rango["Fecha"].dt.strftime("%Y-%m-%d")
-
                 if df_rango.empty:
-                    st.warning("📭 No hay registros en ese rango de fechas.")
+                    st.warning("📭 No hay registros en ese rango.")
                 else:
                     st.success(f"✅ **{len(df_rango)}** registros entre **{f_inicio}** y **{f_fin}**")
                     agrupacion = st.radio("Ver como:", ["Detalle por día", "Resumen por insumo"], horizontal=True)
-
                     if agrupacion == "Detalle por día":
-                        cols_r = ["Fecha","Código","Insumo","UM"] + [f"Mesa {m}" for m in MESAS] + ["Total"]
+                        cols_r  = ["Fecha","Código","Insumo","UM"] + [f"Mesa {m}" for m in MESAS] + ["Total"]
                         df_show = df_rango[cols_r]
                         nombre_archivo = f"detalle_{f_inicio}_{f_fin}.xlsx"
                     else:
                         df_show = (df_rango.groupby(["Código","Insumo","UM"])["Total"]
-                                   .sum().reset_index()
-                                   .sort_values("Total", ascending=False)
+                                   .sum().reset_index().sort_values("Total", ascending=False)
                                    .rename(columns={"Total":"Total Acumulado"}))
                         nombre_archivo = f"resumen_{f_inicio}_{f_fin}.xlsx"
-
                     st.dataframe(df_show, use_container_width=True, hide_index=True)
-
                     c1, c2, c3 = st.columns(3)
                     c1.metric("📦 Registros", len(df_rango))
                     c2.metric("🧴 Insumos distintos", df_rango["Insumo"].nunique())
                     c3.metric("⚖️ Total acumulado", f"{df_rango['Total'].sum():,.2f}")
-
                     st.download_button("📥 Descargar Excel", data=excel_bytes(df_show),
                                        file_name=nombre_archivo,
                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -514,11 +476,12 @@ with tab4:
             elif n_insumo.upper() in df_inv["INSUMO"].str.upper().values:
                 st.error(f"Ya existe el insumo **{n_insumo}**.")
             else:
-                nueva = pd.DataFrame([{"CÓDIGO": n_codigo.strip(),
-                                        "INSUMO": n_insumo.strip().upper(),
-                                        "UM": n_um.strip().upper()}])
+                nueva  = pd.DataFrame([{"CÓDIGO": n_codigo.strip(),
+                                         "INSUMO": n_insumo.strip().upper(),
+                                         "UM": n_um.strip().upper()}])
                 df_inv = pd.concat([df_inv, nueva], ignore_index=True).sort_values("INSUMO")
-                guardar_inventario(df_inv)
+                with st.spinner("Guardando..."):
+                    guardar_inventario(df_inv)
                 st.success(f"✅ Insumo **{n_insumo}** creado correctamente.")
                 st.rerun()
 
@@ -537,7 +500,8 @@ with tab4:
                 df_inv.at[idx_edit, "CÓDIGO"] = e_cod.strip()
                 df_inv.at[idx_edit, "INSUMO"] = e_ins.strip().upper()
                 df_inv.at[idx_edit, "UM"]     = e_um.strip().upper()
-                guardar_inventario(df_inv)
+                with st.spinner("Guardando..."):
+                    guardar_inventario(df_inv)
                 st.success("✅ Insumo actualizado correctamente.")
                 st.rerun()
 
@@ -553,7 +517,8 @@ with tab4:
             if st.checkbox("Confirmo que deseo eliminar este insumo", key="confirm_del"):
                 if st.button("🗑️ Eliminar definitivamente", type="primary"):
                     df_inv = df_inv[df_inv["INSUMO"] != sel_del].reset_index(drop=True)
-                    guardar_inventario(df_inv)
+                    with st.spinner("Eliminando..."):
+                        guardar_inventario(df_inv)
                     st.success(f"✅ Insumo **{sel_del}** eliminado.")
                     st.rerun()
 
