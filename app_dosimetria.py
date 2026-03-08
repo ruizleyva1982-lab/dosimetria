@@ -9,7 +9,7 @@ from google.oauth2.service_account import Credentials
 # ──────────────────────────────────────────────
 # CONFIGURACIÓN
 # ──────────────────────────────────────────────
-MESAS = [1, 2, 3, 4, 5]
+MESAS = [1, 2, 3, 4, 5, "Tránsito"]
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
           "https://www.googleapis.com/auth/drive"]
 
@@ -86,7 +86,8 @@ def cargar_registros() -> dict:
             clave = f"{row.get('fecha','')}__{row.get('codigo','')}"
             mesas = {}
             for m in MESAS:
-                mesas[str(m)] = safe_float(row.get(f"mesa{m}", 0))
+                key_m = f"mesa{m}" if isinstance(m, int) else "mesatransito"
+                mesas[str(m)] = safe_float(row.get(key_m, 0))
             registros[clave] = {
                 "fecha":   row.get("fecha", ""),
                 "codigo":  row.get("codigo", ""),
@@ -105,7 +106,7 @@ def guardar_registros(data: dict):
     try:
         ws = get_hoja(HOJA_REGISTROS)
         headers = ["fecha","codigo","insumo","um",
-                   "mesa1","mesa2","mesa3","mesa4","mesa5","total","updated"]
+                   "mesa1","mesa2","mesa3","mesa4","mesa5","mesatransito","total","updated"]
         rows = [headers]
         for v in data.values():
             m = v.get("mesas", {})
@@ -119,7 +120,7 @@ def guardar_registros(data: dict):
             rows.append([
                 v.get("fecha",""), v.get("codigo",""), v.get("insumo",""), v.get("um",""),
                 fmt(m.get("1",0)), fmt(m.get("2",0)), fmt(m.get("3",0)),
-                fmt(m.get("4",0)), fmt(m.get("5",0)),
+                fmt(m.get("4",0)), fmt(m.get("5",0)), fmt(m.get("Tránsito",0)),
                 fmt(v.get("total",0)), v.get("updated","")
             ])
         ws.clear()
@@ -249,11 +250,12 @@ with tab1:
         mesas_previas = existente.get("mesas", {str(m): 0 for m in MESAS})
 
         st.markdown("### 🏭 Conteo por Mesa")
-        cols_mesas   = st.columns(5)
+        cols_mesas   = st.columns(6)
         valores_mesa = {}
         for i, m in enumerate(MESAS):
             with cols_mesas[i]:
-                v = st.number_input(f"Mesa {m}", min_value=0.0,
+                label_m = str(m) if isinstance(m, int) else m
+                v = st.number_input(label_m if not isinstance(m, int) else f"Mesa {m}", min_value=0.0,
                                     value=float(mesas_previas.get(str(m), 0)),
                                     step=0.5, key=f"mesa_{m}_{clave}")
                 valores_mesa[str(m)] = v
