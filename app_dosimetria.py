@@ -37,6 +37,87 @@ def get_hoja(nombre: str):
     except gspread.WorksheetNotFound:
         return sh.add_worksheet(title=nombre, rows=1000, cols=20)
 
+
+# ──────────────────────────────────────────────
+# IMÁGENES EN GOOGLE DRIVE
+# ──────────────────────────────────────────────
+DRIVE_FOLDER_NAME = "dosimetria_imagenes"
+
+def get_drive_service():
+    from googleapiclient.discovery import build
+    creds_dict = st.secrets["gcp_service_account"]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    return build("drive", "v3", credentials=creds)
+
+@st.cache_data(ttl=300)
+def get_or_create_folder() -> str:
+    """Obtiene o crea la carpeta de imágenes en Drive, retorna su ID."""
+    try:
+        service = get_drive_service()
+        results = service.files().list(
+            q=f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+            fields="files(id,name)"
+        ).execute()
+        files = results.get("files", [])
+        if files:
+            return files[0]["id"]
+        folder = service.files().create(
+            body={"name": DRIVE_FOLDER_NAME, "mimeType": "application/vnd.google-apps.folder"},
+            fields="id"
+        ).execute()
+        folder_id = folder["id"]
+        # Hacer la carpeta pública para lectura
+        service.permissions().create(
+            fileId=folder_id,
+            body={"type": "anyone", "role": "reader"}
+        ).execute()
+        return folder_id
+    except Exception as e:
+        return None
+
+def subir_imagen_drive(codigo: str, imagen_bytes: bytes, mime_type: str) -> str:
+    """Sube imagen a Drive y retorna la URL pública directa."""
+    try:
+        from googleapiclient.http import MediaIoBaseUpload
+        service  = get_drive_service()
+        folder_id = get_or_create_folder()
+        # Buscar si ya existe imagen para este código y eliminarla
+        results = service.files().list(
+            q=f"name='img_{codigo}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id)"
+        ).execute()
+        for f in results.get("files", []):
+            service.files().delete(fileId=f["id"]).execute()
+        # Subir nueva imagen
+        ext = "jpg" if "jpeg" in mime_type else mime_type.split("/")[-1]
+        media = MediaIoBaseUpload(io.BytesIO(imagen_bytes), mimetype=mime_type)
+        file_meta = {"name": f"img_{codigo}", "parents": [folder_id]}
+        uploaded = service.files().create(body=file_meta, media_body=media, fields="id").execute()
+        file_id = uploaded["id"]
+        # Hacer pública la imagen
+        service.permissions().create(
+            fileId=file_id,
+            body={"type": "anyone", "role": "reader"}
+        ).execute()
+        # Retornar URL directa
+        return f"https://drive.google.com/thumbnail?id={file_id}&sz=w400"
+    except Exception as e:
+        st.error(f"Error subiendo imagen: {e}")
+        return ""
+
+def eliminar_imagen_drive(codigo: str):
+    try:
+        service   = get_drive_service()
+        folder_id = get_or_create_folder()
+        results   = service.files().list(
+            q=f"name='img_{codigo}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id)"
+        ).execute()
+        for f in results.get("files", []):
+            service.files().delete(fileId=f["id"]).execute()
+    except:
+        pass
+
 # ──────────────────────────────────────────────
 # INVENTARIO
 # ──────────────────────────────────────────────
@@ -49,6 +130,8 @@ def cargar_inventario() -> pd.DataFrame:
             return pd.DataFrame(columns=["CÓDIGO", "INSUMO", "UM"])
         df = pd.DataFrame(data)
         df.columns = [c.strip().upper() for c in df.columns]
+        if "IMAGE_URL" not in df.columns:
+            df["IMAGE_URL"] = ""
         return df
     except Exception as e:
         st.error(f"Error cargando inventario: {e}")
@@ -240,9 +323,21 @@ with tab1:
         um     = fila.get("UM", "")
 
         c1, c2, c3 = st.columns(3)
-        c1.markdown(f"<div class='metric-box'>🔑 <b>Código</b><br>{codigo}</div>", unsafe_allow_html=True)
-        c2.markdown(f"<div class='metric-box'>📦 <b>Insumo</b><br>{insumo_sel}</div>", unsafe_allow_html=True)
-        c3.markdown(f"<div class='metric-box'>⚖️ <b>UM</b><br>{um}</div>", unsafe_allow_html=True)
+        image_url = fila.get("IMAGE_URL", "")
+        if image_url:
+            col_img, col_info = st.columns([1, 3])
+            with col_img:
+                st.image(image_url, width=180, caption=insumo_sel)
+            with col_info:
+                c1, c2, c3 = st.columns(3)
+                c1.markdown(f"<div class='metric-box'>🔑 <b>Código</b><br>{codigo}</div>", unsafe_allow_html=True)
+                c2.markdown(f"<div class='metric-box'>📦 <b>Insumo</b><br>{insumo_sel}</div>", unsafe_allow_html=True)
+                c3.markdown(f"<div class='metric-box'>⚖️ <b>UM</b><br>{um}</div>", unsafe_allow_html=True)
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f"<div class='metric-box'>🔑 <b>Código</b><br>{codigo}</div>", unsafe_allow_html=True)
+            c2.markdown(f"<div class='metric-box'>📦 <b>Insumo</b><br>{insumo_sel}</div>", unsafe_allow_html=True)
+            c3.markdown(f"<div class='metric-box'>⚖️ <b>UM</b><br>{um}</div>", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
         clave         = f"{fecha_str}__{codigo}"
@@ -486,6 +581,7 @@ with tab4:
         n_codigo = st.text_input("Código *", key="n_cod")
         n_insumo = st.text_input("Nombre del insumo *", key="n_ins")
         n_um     = st.text_input("Unidad de medida (UM)", value="KILOGRAMO", key="n_um")
+        n_img    = st.file_uploader("📷 Imagen del insumo (opcional)", type=["jpg","jpeg","png","webp"], key="n_img")
         if st.button("✅ Crear Insumo", type="primary"):
             if not n_codigo or not n_insumo:
                 st.error("El código y el nombre son obligatorios.")
@@ -494,9 +590,14 @@ with tab4:
             elif n_insumo.upper() in df_inv["INSUMO"].str.upper().values:
                 st.error(f"Ya existe el insumo **{n_insumo}**.")
             else:
+                img_url = ""
+                if n_img is not None:
+                    with st.spinner("Subiendo imagen..."):
+                        img_url = subir_imagen_drive(n_codigo.strip(), n_img.read(), n_img.type)
                 nueva  = pd.DataFrame([{"CÓDIGO": n_codigo.strip(),
                                          "INSUMO": n_insumo.strip().upper(),
-                                         "UM": n_um.strip().upper()}])
+                                         "UM": n_um.strip().upper(),
+                                         "IMAGE_URL": img_url}])
                 df_inv = pd.concat([df_inv, nueva], ignore_index=True).sort_values("INSUMO")
                 with st.spinner("Guardando..."):
                     guardar_inventario(df_inv)
@@ -514,10 +615,23 @@ with tab4:
             e_cod = st.text_input("Código", value=fila_edit["CÓDIGO"], key="e_cod")
             e_ins = st.text_input("Nombre", value=fila_edit["INSUMO"],  key="e_ins")
             e_um  = st.text_input("UM",     value=fila_edit.get("UM",""), key="e_um")
+
+            # Imagen actual
+            img_actual = fila_edit.get("IMAGE_URL", "")
+            if img_actual:
+                st.markdown("**Imagen actual:**")
+                st.image(img_actual, width=200)
+            img_file = st.file_uploader("📷 Subir/reemplazar imagen", type=["jpg","jpeg","png","webp"], key="img_edit")
+
             if st.button("💾 Guardar cambios", type="primary"):
                 df_inv.at[idx_edit, "CÓDIGO"] = e_cod.strip()
                 df_inv.at[idx_edit, "INSUMO"] = e_ins.strip().upper()
                 df_inv.at[idx_edit, "UM"]     = e_um.strip().upper()
+                if img_file is not None:
+                    with st.spinner("Subiendo imagen..."):
+                        url = subir_imagen_drive(e_cod.strip(), img_file.read(), img_file.type)
+                    if url:
+                        df_inv.at[idx_edit, "IMAGE_URL"] = url
                 with st.spinner("Guardando..."):
                     guardar_inventario(df_inv)
                 st.success("✅ Insumo actualizado correctamente.")
@@ -534,6 +648,7 @@ with tab4:
             st.error(f"¿Eliminar **{sel_del}** (Código: {fila_del['CÓDIGO']})?")
             if st.checkbox("Confirmo que deseo eliminar este insumo", key="confirm_del"):
                 if st.button("🗑️ Eliminar definitivamente", type="primary"):
+                    eliminar_imagen_drive(fila_del["CÓDIGO"])
                     df_inv = df_inv[df_inv["INSUMO"] != sel_del].reset_index(drop=True)
                     with st.spinner("Eliminando..."):
                         guardar_inventario(df_inv)
