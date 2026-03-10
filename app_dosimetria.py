@@ -41,7 +41,7 @@ def get_hoja(nombre: str):
 # ──────────────────────────────────────────────
 # IMÁGENES EN CLOUDINARY
 # ──────────────────────────────────────────────
-def subir_imagen_cloudinary(imagen_bytes: bytes) -> str:
+def subir_imagen_imgur(imagen_bytes: bytes) -> str:
     """Sube imagen a Cloudinary usando unsigned upload preset."""
     try:
         import requests, base64
