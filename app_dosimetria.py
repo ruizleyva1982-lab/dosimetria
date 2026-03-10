@@ -45,11 +45,12 @@ def subir_imagen_imgur(imagen_bytes: bytes) -> str:
     """Sube imagen a Cloudinary usando unsigned upload preset."""
     try:
         import requests, base64
-        cloud_name  = st.secrets["cloudinary_cloud_name"]
+        # Cloud name fijo - no requiere secrets
+        cloud_name  = "dtvbiezoa"
         b64         = base64.b64encode(imagen_bytes).decode("utf-8")
         url         = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
         resp = requests.post(url, data={
-            "file":         f"data:image/jpeg;base64,{b64}",
+            "file":          f"data:image/jpeg;base64,{b64}",
             "upload_preset": "dosimetria_preset",
         })
         data = resp.json()
