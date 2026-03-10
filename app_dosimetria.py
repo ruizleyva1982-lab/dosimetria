@@ -42,24 +42,15 @@ def get_hoja(nombre: str):
 # IMÁGENES EN CLOUDINARY
 # ──────────────────────────────────────────────
 def subir_imagen_imgur(imagen_bytes: bytes) -> str:
-    """Sube imagen a Cloudinary y retorna URL pública directa."""
+    """Sube imagen a Cloudinary usando unsigned upload preset."""
     try:
-        import requests, base64, hashlib, time
-        cloud_name = st.secrets["cloudinary_cloud_name"]
-        api_key    = st.secrets["cloudinary_api_key"]
-        api_secret = st.secrets["cloudinary_api_secret"]
-        timestamp  = str(int(time.time()))
-        # Firma
-        to_sign    = f"timestamp={timestamp}{api_secret}"
-        signature  = hashlib.sha1(to_sign.encode()).hexdigest()
-        b64        = base64.b64encode(imagen_bytes).decode("utf-8")
-        url        = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
+        import requests, base64
+        cloud_name  = st.secrets["cloudinary_cloud_name"]
+        b64         = base64.b64encode(imagen_bytes).decode("utf-8")
+        url         = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
         resp = requests.post(url, data={
-            "file":      f"data:image/jpeg;base64,{b64}",
-            "api_key":   api_key,
-            "timestamp": timestamp,
-            "signature": signature,
-            "folder":    "dosimetria",
+            "file":         f"data:image/jpeg;base64,{b64}",
+            "upload_preset": "dosimetria_preset",
         })
         data = resp.json()
         if "secure_url" in data:
