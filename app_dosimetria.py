@@ -41,7 +41,7 @@ def get_hoja(nombre: str):
 # ──────────────────────────────────────────────
 # IMÁGENES EN CLOUDINARY
 # ──────────────────────────────────────────────
-def subir_imagen_imgur(imagen_bytes: bytes) -> str:
+def subir_imagen_cloudinary(imagen_bytes: bytes) -> str:
     """Sube imagen a Cloudinary usando unsigned upload preset."""
     try:
         import requests, base64
@@ -49,10 +49,13 @@ def subir_imagen_imgur(imagen_bytes: bytes) -> str:
         cloud_name  = "dtvbiezoa"
         b64         = base64.b64encode(imagen_bytes).decode("utf-8")
         url         = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
-        resp = requests.post(url, data={
-            "file":          f"data:image/jpeg;base64,{b64}",
-            "upload_preset": "dosimetria_preset",
-        })
+        import uuid
+          resp = requests.post(url, data={
+              "file": f"data:image/jpeg;base64,{b64}",
+              "upload_preset": "dosimetria_preset",
+              "public_id": f"insumo_{uuid.uuid4().hex}",
+              "folder": "dosimetria"
+          })
         data = resp.json()
         if "secure_url" in data:
             return data["secure_url"]
