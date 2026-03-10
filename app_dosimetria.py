@@ -39,84 +39,39 @@ def get_hoja(nombre: str):
 
 
 # ──────────────────────────────────────────────
-# IMÁGENES EN GOOGLE DRIVE
+# IMÁGENES EN CLOUDINARY
 # ──────────────────────────────────────────────
-DRIVE_FOLDER_NAME = "dosimetria_imagenes"
-
-def get_drive_service():
-    from googleapiclient.discovery import build
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    return build("drive", "v3", credentials=creds)
-
-@st.cache_data(ttl=300)
-def get_or_create_folder() -> str:
-    """Obtiene o crea la carpeta de imágenes en Drive, retorna su ID."""
+def subir_imagen_imgur(imagen_bytes: bytes) -> str:
+    """Sube imagen a Cloudinary y retorna URL pública directa."""
     try:
-        service = get_drive_service()
-        results = service.files().list(
-            q=f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-            fields="files(id,name)"
-        ).execute()
-        files = results.get("files", [])
-        if files:
-            return files[0]["id"]
-        folder = service.files().create(
-            body={"name": DRIVE_FOLDER_NAME, "mimeType": "application/vnd.google-apps.folder"},
-            fields="id"
-        ).execute()
-        folder_id = folder["id"]
-        # Hacer la carpeta pública para lectura
-        service.permissions().create(
-            fileId=folder_id,
-            body={"type": "anyone", "role": "reader"}
-        ).execute()
-        return folder_id
-    except Exception as e:
-        return None
-
-def subir_imagen_drive(codigo: str, imagen_bytes: bytes, mime_type: str) -> str:
-    """Sube imagen a Drive y retorna la URL pública directa."""
-    try:
-        from googleapiclient.http import MediaIoBaseUpload
-        service  = get_drive_service()
-        folder_id = get_or_create_folder()
-        # Buscar si ya existe imagen para este código y eliminarla
-        results = service.files().list(
-            q=f"name='img_{codigo}' and '{folder_id}' in parents and trashed=false",
-            fields="files(id)"
-        ).execute()
-        for f in results.get("files", []):
-            service.files().delete(fileId=f["id"]).execute()
-        # Subir nueva imagen
-        ext = "jpg" if "jpeg" in mime_type else mime_type.split("/")[-1]
-        media = MediaIoBaseUpload(io.BytesIO(imagen_bytes), mimetype=mime_type)
-        file_meta = {"name": f"img_{codigo}", "parents": [folder_id]}
-        uploaded = service.files().create(body=file_meta, media_body=media, fields="id").execute()
-        file_id = uploaded["id"]
-        # Hacer pública la imagen
-        service.permissions().create(
-            fileId=file_id,
-            body={"type": "anyone", "role": "reader"}
-        ).execute()
-        # Retornar URL directa
-        return f"https://drive.google.com/thumbnail?id={file_id}&sz=w400"
+        import requests, base64, hashlib, time
+        cloud_name = st.secrets["cloudinary_cloud_name"]
+        api_key    = st.secrets["cloudinary_api_key"]
+        api_secret = st.secrets["cloudinary_api_secret"]
+        timestamp  = str(int(time.time()))
+        # Firma
+        to_sign    = f"timestamp={timestamp}{api_secret}"
+        signature  = hashlib.sha1(to_sign.encode()).hexdigest()
+        b64        = base64.b64encode(imagen_bytes).decode("utf-8")
+        url        = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
+        resp = requests.post(url, data={
+            "file":      f"data:image/jpeg;base64,{b64}",
+            "api_key":   api_key,
+            "timestamp": timestamp,
+            "signature": signature,
+            "folder":    "dosimetria",
+        })
+        data = resp.json()
+        if "secure_url" in data:
+            return data["secure_url"]
+        st.error(f"Error Cloudinary: {data}")
+        return ""
     except Exception as e:
         st.error(f"Error subiendo imagen: {e}")
         return ""
 
 def eliminar_imagen_drive(codigo: str):
-    try:
-        service   = get_drive_service()
-        folder_id = get_or_create_folder()
-        results   = service.files().list(
-            q=f"name='img_{codigo}' and '{folder_id}' in parents and trashed=false",
-            fields="files(id)"
-        ).execute()
-        for f in results.get("files", []):
-            service.files().delete(fileId=f["id"]).execute()
-    except:
-        pass
+    pass  # Las imágenes se mantienen en Cloudinary
 
 # ──────────────────────────────────────────────
 # INVENTARIO
@@ -593,7 +548,7 @@ with tab4:
                 img_url = ""
                 if n_img is not None:
                     with st.spinner("Subiendo imagen..."):
-                        img_url = subir_imagen_drive(n_codigo.strip(), n_img.read(), n_img.type)
+                        img_url = subir_imagen_imgur(n_img.read())
                 nueva  = pd.DataFrame([{"CÓDIGO": n_codigo.strip(),
                                          "INSUMO": n_insumo.strip().upper(),
                                          "UM": n_um.strip().upper(),
@@ -629,7 +584,7 @@ with tab4:
                 df_inv.at[idx_edit, "UM"]     = e_um.strip().upper()
                 if img_file is not None:
                     with st.spinner("Subiendo imagen..."):
-                        url = subir_imagen_drive(e_cod.strip(), img_file.read(), img_file.type)
+                        url = subir_imagen_imgur(img_file.read())
                     if url:
                         df_inv.at[idx_edit, "IMAGE_URL"] = url
                 with st.spinner("Guardando..."):
