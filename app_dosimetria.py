@@ -45,13 +45,14 @@ def subir_imagen_imgur(imagen_bytes: bytes) -> str:
     """Sube imagen a Cloudinary usando unsigned upload preset."""
     try:
         import requests, base64
-        # Cloud name fijo - no requiere secrets
-        cloud_name  = "dtvbiezoa"
+        # Cloud name y preset configurables vía secrets, con valores por defecto
+        cloud_name     = st.secrets.get("cloudinary_cloud_name", "dtvbiezoa")
+        upload_preset  = st.secrets.get("cloudinary_upload_preset", "dosimetria_preset")
         b64         = base64.b64encode(imagen_bytes).decode("utf-8")
         url         = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
         resp = requests.post(url, data={
             "file":          f"data:image/jpeg;base64,{b64}",
-            "upload_preset": "dosimetria_preset",
+            "upload_preset": upload_preset,
         })
         data = resp.json()
         if "secure_url" in data:
@@ -131,6 +132,19 @@ def cargar_registros() -> dict:
     except Exception as e:
         st.error(f"Error cargando registros: {e}")
         return {}
+
+def eliminar_todos_los_registros():
+    """Elimina TODOS los registros de conteo (deja solo la fila de encabezados)."""
+    try:
+        ws = get_hoja(HOJA_REGISTROS)
+        headers = ["fecha","codigo","insumo","um",
+                   "mesa1","mesa2","mesa3","mesa4","mesa5","mesatransito","total","updated"]
+        ws.clear()
+        ws.update([headers])
+        cargar_registros.clear()
+    except Exception as e:
+        st.error(f"Error eliminando registros: {e}")
+        st.stop()
 
 def guardar_registros(data: dict):
     try:
@@ -521,7 +535,7 @@ with tab3:
 with tab4:
     st.subheader("⚙️ Gestión de Insumos del Catálogo")
     df_inv = cargar_inventario()
-    sub1, sub2, sub3 = st.tabs(["➕ Nuevo Insumo", "✏️ Editar Insumo", "🗑️ Eliminar Insumo"])
+    sub1, sub2, sub3, sub4 = st.tabs(["➕ Nuevo Insumo", "✏️ Editar Insumo", "🗑️ Eliminar Insumo", "🔥 Zona de Peligro"])
 
     with sub1:
         st.markdown("#### Crear nuevo insumo")
@@ -601,6 +615,46 @@ with tab4:
                         guardar_inventario(df_inv)
                     st.success(f"✅ Insumo **{sel_del}** eliminado.")
                     st.rerun()
+
+    with sub4:
+        st.markdown("#### 🔥 Eliminar TODOS los registros de conteo")
+        st.error(
+            "⚠️ **Esta acción elimina de forma permanente TODOS los registros de conteo "
+            "(todas las fechas, todas las mesas, todos los insumos).** El catálogo de "
+            "insumos (Tab ⚙️ Gestión de Insumos) NO se ve afectado, solo los conteos "
+            "guardados en la pestaña 📋 Registro de Conteo."
+        )
+
+        registros_actuales = cargar_registros()
+        n_registros = len(registros_actuales)
+        st.metric("📦 Registros actuales en el sistema", n_registros)
+
+        if n_registros == 0:
+            st.info("📭 No hay registros para eliminar.")
+        else:
+            df_backup = registros_a_df(registros_actuales)
+            st.download_button(
+                "📥 Descargar backup en Excel antes de eliminar (recomendado)",
+                data=excel_bytes(df_backup),
+                file_name=f"backup_registros_{date.today().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+            st.markdown("---")
+            confirmar_check = st.checkbox(
+                "Confirmo que deseo eliminar TODOS los registros de conteo", key="confirm_del_all"
+            )
+            confirmar_texto = st.text_input(
+                'Escribe **ELIMINAR** para confirmar', key="confirm_del_all_texto"
+            )
+            if confirmar_check and confirmar_texto.strip().upper() == "ELIMINAR":
+                if st.button("🔥 Eliminar TODOS los registros definitivamente", type="primary"):
+                    with st.spinner("Eliminando todos los registros..."):
+                        eliminar_todos_los_registros()
+                    st.success("✅ Todos los registros de conteo fueron eliminados.")
+                    st.rerun()
+            else:
+                st.button("🔥 Eliminar TODOS los registros definitivamente", type="primary", disabled=True)
 
     st.markdown("---")
     with st.expander(f"📚 Ver catálogo completo ({len(df_inv)} insumos)"):
