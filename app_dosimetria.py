@@ -535,7 +535,7 @@ with tab3:
 with tab4:
     st.subheader("⚙️ Gestión de Insumos del Catálogo")
     df_inv = cargar_inventario()
-    sub1, sub2, sub3, sub4 = st.tabs(["➕ Nuevo Insumo", "✏️ Editar Insumo", "🗑️ Eliminar Insumo", "🔥 Zona de Peligro"])
+    sub1, sub2, sub3, sub4 = st.tabs(["➕ Nuevo Insumo", "✏️ Editar Insumo", "🗑️ Eliminar Insumo", "🔥 Eliminar todos los registros"])
 
     with sub1:
         st.markdown("#### Crear nuevo insumo")
@@ -617,7 +617,7 @@ with tab4:
                     st.rerun()
 
     with sub4:
-        st.markdown("#### 🔥 Eliminar TODOS los registros de conteo")
+        st.markdown("#### Eliminar TODOS los registros de conteo")
         st.error(
             "⚠️ **Esta acción elimina de forma permanente TODOS los registros de conteo "
             "(todas las fechas, todas las mesas, todos los insumos).** El catálogo de "
@@ -644,10 +644,7 @@ with tab4:
             confirmar_check = st.checkbox(
                 "Confirmo que deseo eliminar TODOS los registros de conteo", key="confirm_del_all"
             )
-            confirmar_texto = st.text_input(
-                'Escribe **ELIMINAR** para confirmar', key="confirm_del_all_texto"
-            )
-            if confirmar_check and confirmar_texto.strip().upper() == "ELIMINAR":
+            if confirmar_check:
                 if st.button("🔥 Eliminar TODOS los registros definitivamente", type="primary"):
                     with st.spinner("Eliminando todos los registros..."):
                         eliminar_todos_los_registros()
