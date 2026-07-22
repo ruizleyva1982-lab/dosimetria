@@ -9,7 +9,7 @@ from google.oauth2.service_account import Credentials
 # ──────────────────────────────────────────────
 # CONFIGURACIÓN
 # ──────────────────────────────────────────────
-MESAS = [1, 2, 3, 4, 5, "Tránsito"]
+MESAS = [1, 2, 3, 4, 5, 6, "Tránsito"]
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
           "https://www.googleapis.com/auth/drive"]
 
@@ -138,7 +138,7 @@ def eliminar_todos_los_registros():
     try:
         ws = get_hoja(HOJA_REGISTROS)
         headers = ["fecha","codigo","insumo","um",
-                   "mesa1","mesa2","mesa3","mesa4","mesa5","mesatransito","total","updated"]
+                   "mesa1","mesa2","mesa3","mesa4","mesa5","mesa6","mesatransito","total","updated"]
         ws.clear()
         ws.update([headers])
         cargar_registros.clear()
@@ -150,7 +150,7 @@ def guardar_registros(data: dict):
     try:
         ws = get_hoja(HOJA_REGISTROS)
         headers = ["fecha","codigo","insumo","um",
-                   "mesa1","mesa2","mesa3","mesa4","mesa5","mesatransito","total","updated"]
+                   "mesa1","mesa2","mesa3","mesa4","mesa5","mesa6","mesatransito","total","updated"]
         rows = [headers]
         for v in data.values():
             m = v.get("mesas", {})
@@ -306,7 +306,7 @@ with tab1:
         mesas_previas = existente.get("mesas", {str(m): 0 for m in MESAS})
 
         st.markdown("### 🏭 Conteo por Mesa")
-        cols_mesas   = st.columns(6)
+        cols_mesas   = st.columns(len(MESAS))
         valores_mesa = {}
         for i, m in enumerate(MESAS):
             with cols_mesas[i]:
