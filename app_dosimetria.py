@@ -164,7 +164,7 @@ def guardar_registros(data: dict):
             rows.append([
                 v.get("fecha",""), v.get("codigo",""), v.get("insumo",""), v.get("um",""),
                 fmt(m.get("1",0)), fmt(m.get("2",0)), fmt(m.get("3",0)),
-                fmt(m.get("4",0)), fmt(m.get("5",0)), fmt(m.get("Tránsito",0)),
+                fmt(m.get("4",0)), fmt(m.get("5",0)), fmt(m.get("6",0)), fmt(m.get("Tránsito",0)),
                 fmt(v.get("total",0)), v.get("updated","")
             ])
         ws.clear()
